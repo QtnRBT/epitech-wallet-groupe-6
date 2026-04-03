@@ -28,5 +28,8 @@ else
   echo "[entrypoint] Seed skipped (RUN_DB_SEED=false)"
 fi
 
+echo "[entrypoint] Building Next.js app"
+bun run build
+
 echo "[entrypoint] Starting Next.js app"
 exec bun run start

@@ -1,4 +1,4 @@
-FROM oven/bun:1.2.13-alpine
+FROM oven/bun:1.2.13
 
 WORKDIR /app
 
@@ -18,9 +18,6 @@ ENV NODE_ENV=production \
     INTERWALLET_SYSTEM_NAME=Wallet \
     STRIPE_SECRET_KEY=sk_test_dummy \
     STRIPE_CURRENCY=EUR
-
-# Build app once, run many times
-RUN bunx prisma generate && bun run build
 
 EXPOSE 3000
 
