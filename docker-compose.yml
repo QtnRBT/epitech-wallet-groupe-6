@@ -2,59 +2,75 @@ services:
   postgres:
     image: postgres:16-alpine
     container_name: wallet-postgres
+    restart: unless-stopped
     environment:
-      POSTGRES_USER: wallet_user
-      POSTGRES_PASSWORD: wallet_password
-      POSTGRES_DB: wallet_db
+      POSTGRES_USER: ${POSTGRES_USER:-wallet_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-wallet_password}
+      POSTGRES_DB: ${POSTGRES_DB:-wallet_db}
     ports:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    networks:
+      - wallet-network
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U wallet_user -d wallet_db"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-wallet_user} -d ${POSTGRES_DB:-wallet_db}"]
       interval: 5s
       timeout: 5s
-      retries: 5
+      retries: 10
 
-  web:
-    image: oven/bun:latest
-    container_name: wallet-web
-    working_dir: /app
-    volumes:
-      - ./:/app
+  webapp:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: wallet-webapp
+    restart: unless-stopped
     env_file:
       - .env
     environment:
-      # Force l'app à utiliser le service postgres du compose
-      DATABASE_URL: postgresql://wallet_user:wallet_password@postgres:5432/wallet_db
-      # Build + run Next.js en mode production dans le container
       NODE_ENV: production
+      DATABASE_URL: ${DATABASE_URL:-postgresql://wallet_user:wallet_password@postgres:5432/wallet_db}
+      RUN_DB_SEED: ${RUN_DB_SEED:-true}
+      DB_PUSH_MAX_ATTEMPTS: ${DB_PUSH_MAX_ATTEMPTS:-30}
+    ports:
+      - "3000:3000"
     depends_on:
       postgres:
         condition: service_healthy
-    command: >
-      sh -c "
-        bun install &&
-        bunx prisma generate &&
-        bunx prisma db push &&
-        bun run build &&
-        bun run start
-      "
-    ports:
-      - "3000:3000"
+    networks:
+      - wallet-network
 
   stripe-listener:
     image: stripe/stripe-cli:latest
     container_name: wallet-stripe-listener
-    environment:
-      # Utilise la clé Stripe de test définie dans .env
-      STRIPE_API_KEY: ${STRIPE_SECRET_KEY}
+    restart: unless-stopped
+    env_file:
+      - .env
     depends_on:
-      - web
+      webapp:
+        condition: service_started
     command: >
-      listen
-      --api-key ${STRIPE_SECRET_KEY}
-      --forward-to web:3000/api/payments/webhook
+      sh -c '
+        if [ "${ENABLE_STRIPE_LISTENER:-false}" != "true" ]; then
+          echo "Stripe listener disabled (ENABLE_STRIPE_LISTENER=false)";
+          tail -f /dev/null;
+        fi;
+
+        if [ -z "${STRIPE_SECRET_KEY:-}" ]; then
+          echo "Missing STRIPE_SECRET_KEY for stripe-listener";
+          exit 1;
+        fi;
+
+        stripe listen \
+          --api-key "${STRIPE_SECRET_KEY}" \
+          --forward-to webapp:3000/api/payments/webhook
+      '
+    networks:
+      - wallet-network
 
 volumes:
   postgres_data:
+
+networks:
+  wallet-network:
+    driver: bridge
